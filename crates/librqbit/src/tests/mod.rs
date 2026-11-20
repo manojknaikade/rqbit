@@ -4,4 +4,5 @@ mod e2e_padded_files;
 mod e2e_ratelimits;
 mod e2e_stream;
 mod file_order;
+mod recheck;
 pub mod test_util;
