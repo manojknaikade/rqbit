@@ -1247,6 +1247,7 @@ impl Session {
 
         let private = metadata.as_ref().is_some_and(|m| m.info.info().private);
 
+        let (reannounce_tx, reannounce_rx) = tokio::sync::watch::channel(());
         let make_peer_rx = || {
             self.make_peer_rx(
                 info_hash,
@@ -1255,6 +1256,7 @@ impl Session {
                 opts.force_tracker_interval,
                 opts.initial_peers.clone().unwrap_or_default(),
                 private,
+                reannounce_rx.clone(),
             )
         };
 
@@ -1385,6 +1387,7 @@ impl Session {
                 ratelimits: Limits::new(opts.ratelimits),
                 magnet_name: name,
                 client_name_and_version: self.client_name_and_version.clone(),
+                reannounce_tx,
             });
 
             let initializing = Arc::new(TorrentStateInitializing::new(
@@ -1545,10 +1548,12 @@ impl Session {
             t.shared().options.force_tracker_interval,
             t.shared().options.initial_peers.clone(),
             is_private,
+            t.shared().reannounce_tx.subscribe(),
         )
     }
 
     // Get a peer stream from both DHT and trackers.
+    #[allow(clippy::too_many_arguments)]
     fn make_peer_rx(
         self: &Arc<Self>,
         info_hash: Id20,
@@ -1557,6 +1562,7 @@ impl Session {
         force_tracker_interval: Option<Duration>,
         initial_peers: Vec<SocketAddr>,
         is_private: bool,
+        reannounce: tokio::sync::watch::Receiver<()>,
     ) -> Option<PeerStream> {
         let dht_rx = if is_private {
             None
@@ -1601,6 +1607,7 @@ impl Session {
             self.announce_port().unwrap_or(4240),
             self.reqwest_client.clone(),
             self.udp_tracker_client.clone(),
+            reannounce,
         );
 
         let initial_peers_rx = if initial_peers.is_empty() {
