@@ -105,6 +105,7 @@ pub(crate) struct ManagedTorrentLocked {
     pub(crate) paused: bool,
     pub(crate) state: ManagedTorrentState,
     pub(crate) only_files: Option<Vec<usize>>,
+    pub(crate) file_order: Option<Vec<usize>>,
 }
 
 #[derive(Default)]
@@ -263,6 +264,12 @@ impl ManagedTorrent {
     pub fn set_ratelimits(&self, config: LimitsConfig) {
         self.shared.ratelimits.set_upload_bps(config.upload_bps);
         self.shared.ratelimits.set_download_bps(config.download_bps);
+    }
+
+    /// The file order set with [`AddTorrentOptions::file_order`](crate::AddTorrentOptions::file_order)
+    /// or [`Self::update_file_order`], if any.
+    pub fn file_order(&self) -> Option<Vec<usize>> {
+        self.locked.read().file_order.clone()
     }
 
     pub fn only_files(&self) -> Option<Vec<usize>> {
@@ -433,7 +440,8 @@ impl ManagedTorrent {
                     }
                     let paused = g.state.take().assert_paused();
                     let (tx, rx) = tokio::sync::oneshot::channel();
-                    let live = TorrentStateLive::new(paused, tx, token.clone())?;
+                    let live =
+                        TorrentStateLive::new(paused, g.file_order.as_deref(), tx, token.clone())?;
                     g.state = ManagedTorrentState::Live(live.clone());
                     t.state_change_notify.notify_waiters();
 
@@ -628,6 +636,23 @@ impl ManagedTorrent {
         .boxed()
     }
 
+    /// Change the order in which this torrent's files are downloaded (file IDs, first
+    /// one first). Files left out keep their usual place after the listed ones, and
+    /// `None` goes back to the default order. Works on live and paused torrents.
+    pub fn update_file_order(&self, file_order: Option<Vec<usize>>) -> anyhow::Result<()> {
+        if let Some(order) = file_order.as_deref() {
+            let metadata = self.metadata.load();
+            let metadata = metadata.as_ref().context("torrent is not resolved")?;
+            validate_file_order(order, metadata.file_infos.len())?;
+        }
+        let mut g = self.locked.write();
+        if let ManagedTorrentState::Live(l) = &g.state {
+            l.update_file_order(file_order.as_deref());
+        }
+        g.file_order = file_order;
+        Ok(())
+    }
+
     // Returns true if needed to unpause torrent.
     // This is just implementation detail - it's easier to pause/unpause than to tinker with internals.
     pub(crate) fn update_only_files(&self, only_files: &HashSet<usize>) -> anyhow::Result<()> {
@@ -660,6 +685,13 @@ impl ManagedTorrent {
         g.only_files = Some(only_files.iter().copied().collect());
         Ok(())
     }
+}
+
+pub(crate) fn validate_file_order(order: &[usize], file_count: usize) -> anyhow::Result<()> {
+    if let Some(f) = order.iter().copied().find(|f| *f >= file_count) {
+        bail!("file_order contains invalid value {f}")
+    }
+    Ok(())
 }
 
 pub type ManagedTorrentHandle = Arc<ManagedTorrent>;
