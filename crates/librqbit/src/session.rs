@@ -184,7 +184,7 @@ fn compute_only_files_regex<ByteBuf: AsRef<[u8]>>(
     torrent: &ValidatedTorrentMetaV1Info<ByteBuf>,
     filename_re: &str,
 ) -> anyhow::Result<Vec<usize>> {
-    let filename_re = regex::Regex::new(filename_re).context("filename regex is incorrect")?;
+    let filename_re = regex_lite::Regex::new(filename_re).context("filename regex is incorrect")?;
     let mut only_files = Vec::new();
     for (idx, fd) in torrent.iter_file_details().enumerate() {
         let full_path = fd.filename.to_pathbuf();
