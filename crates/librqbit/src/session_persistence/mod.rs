@@ -42,15 +42,19 @@ impl SerializedTorrent {
         } else {
             let magnet = Magnet::from_id20(
                 self.info_hash,
-                self.trackers.into_iter().collect(),
+                self.trackers.iter().cloned().collect(),
                 self.only_files.clone(),
             )
             .to_string();
             AddTorrent::from_url(magnet)
         };
 
+        // The saved list is the whole list: trackers removed by hand stay removed.
+        let trackers = (!self.trackers.is_empty()).then(|| self.trackers.iter().cloned().collect());
         let opts = AddTorrentOptions {
             paused: self.is_paused,
+            replace_trackers: trackers.is_some(),
+            trackers,
             output_folder: Some(
                 self.output_folder
                     .to_str()

@@ -112,7 +112,7 @@ impl SessionPersistenceStore for PostgresSessionStorage {
             .bind(
                 torrent
                     .shared()
-                    .trackers
+                    .trackers()
                     .iter()
                     .map(|t| t.to_string())
                     .collect::<Vec<_>>(),

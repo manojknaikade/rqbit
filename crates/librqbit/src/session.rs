@@ -303,6 +303,11 @@ pub struct AddTorrentOptions {
 
     // Custom trackers
     pub trackers: Option<Vec<String>>,
+
+    /// Use only `trackers`, not the ones in the torrent file. Used when restoring a
+    /// torrent whose tracker list was edited.
+    #[serde(default)]
+    pub replace_trackers: bool,
 }
 
 pub struct ListOnlyResponse {
@@ -1188,6 +1193,9 @@ impl Session {
                         })
                         .collect::<Vec<_>>();
                     if let Some(custom_trackers) = opts.trackers.clone() {
+                        if opts.replace_trackers {
+                            trackers.clear();
+                        }
                         trackers.extend(custom_trackers);
                     }
 
@@ -1389,7 +1397,7 @@ impl Session {
                 id,
                 span,
                 info_hash,
-                trackers: trackers.into_iter().collect(),
+                trackers: parking_lot::RwLock::new(trackers.into_iter().collect()),
                 spawner: self.spawner.clone(),
                 peer_id: self.peer_id,
                 storage_factory,
@@ -1566,7 +1574,7 @@ impl Session {
         let is_private = t.with_metadata(|m| m.info.info().private).unwrap_or(false);
         self.make_peer_rx(
             t.info_hash(),
-            t.shared().trackers.iter().cloned().collect(),
+            t.shared().trackers().into_iter().collect(),
             announce,
             t.shared().options.force_tracker_interval,
             t.shared().options.initial_peers.clone(),
@@ -1659,6 +1667,22 @@ impl Session {
         handle.pause()?;
         self.try_update_persistence_metadata(handle).await;
         Ok(())
+    }
+
+    /// Replace the torrent's trackers. The list is saved; a running torrent restarts
+    /// so it announces to the new list at once.
+    pub async fn set_trackers(
+        self: &Arc<Self>,
+        handle: &ManagedTorrentHandle,
+        trackers: Vec<url::Url>,
+    ) -> anyhow::Result<()> {
+        *handle.shared().trackers.write() = trackers.into_iter().collect();
+        if handle.is_paused() {
+            self.try_update_persistence_metadata(handle).await;
+            return Ok(());
+        }
+        handle.pause()?;
+        self.unpause(handle).await
     }
 
     pub async fn unpause(self: &Arc<Self>, handle: &ManagedTorrentHandle) -> anyhow::Result<()> {
