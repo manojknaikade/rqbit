@@ -1451,6 +1451,7 @@ impl Session {
                     state: ManagedTorrentState::Initializing(initializing),
                     only_files,
                     file_order,
+                    random_order: None,
                 }),
                 state_change_notify: Notify::new(),
                 shared: minfo,
