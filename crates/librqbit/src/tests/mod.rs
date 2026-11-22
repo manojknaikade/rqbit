@@ -7,3 +7,4 @@ mod file_order;
 mod reannounce;
 mod recheck;
 pub mod test_util;
+mod webseed;

@@ -42,6 +42,7 @@
 pub mod peer;
 pub mod peers;
 pub mod stats;
+mod webseed;
 
 use std::{
     borrow::Cow,
@@ -331,6 +332,16 @@ impl TorrentStateLive {
             format!("[{}]upload_scheduler", state.shared.id),
             state.clone().task_upload_scheduler(ratelimit_upload_rx),
         );
+
+        if !state.is_finished() {
+            for (i, url) in state.shared.web_seeds.iter().enumerate() {
+                state.spawn(
+                    debug_span!(parent: state.shared.span.clone(), "webseed", url = %url),
+                    format!("[{}]webseed{i}", state.shared.id),
+                    state.clone().task_webseed(i, url.clone()),
+                );
+            }
+        }
         Ok(state)
     }
 

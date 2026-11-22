@@ -66,9 +66,44 @@ pub struct TorrentMetaV1<BufType> {
     pub publisher_url: Option<BufType>,
     #[serde(rename = "creation date", skip_serializing_if = "Option::is_none")]
     pub creation_date: Option<usize>,
+    /// Web seeds (BEP 19): HTTP servers that hold the files.
+    #[serde(
+        rename = "url-list",
+        default = "none",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub url_list: Option<UrlList<BufType>>,
 
     #[serde(skip)]
     pub info_hash: Id20,
+}
+
+/// The `url-list` key: one URL, or a list of them.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(untagged)]
+pub enum UrlList<BufType> {
+    One(BufType),
+    Many(Vec<BufType>),
+}
+
+impl<BufType> UrlList<BufType> {
+    pub fn iter(&self) -> impl Iterator<Item = &BufType> {
+        match self {
+            UrlList::One(u) => Either::Left(once(u)),
+            UrlList::Many(v) => Either::Right(v.iter()),
+        }
+    }
+}
+
+impl<BufType: CloneToOwned> CloneToOwned for UrlList<BufType> {
+    type Target = UrlList<<BufType as CloneToOwned>::Target>;
+
+    fn clone_to_owned(&self, within_buffer: Option<&Bytes>) -> Self::Target {
+        match self {
+            UrlList::One(u) => UrlList::One(u.clone_to_owned(within_buffer)),
+            UrlList::Many(v) => UrlList::Many(v.clone_to_owned(within_buffer)),
+        }
+    }
 }
 
 impl<BufType> TorrentMetaV1<BufType> {
@@ -513,6 +548,7 @@ where
             publisher: self.publisher.clone_to_owned(within_buffer),
             publisher_url: self.publisher_url.clone_to_owned(within_buffer),
             creation_date: self.creation_date,
+            url_list: self.url_list.clone_to_owned(within_buffer),
             info_hash: self.info_hash,
         }
     }
@@ -523,6 +559,35 @@ mod tests {
     use bencode::{BencodeValue, from_bytes};
 
     use super::*;
+
+    #[test]
+    fn test_url_list() {
+        let info =
+            b"4:infod6:lengthi1e4:name1:a12:piece lengthi16384e6:pieces20:aaaaaaaaaaaaaaaaaaaae";
+        let one = [b"d".as_slice(), info, b"8:url-list17:http://x.test/a/ae"].concat();
+        let t: TorrentMetaV1<ByteBuf> = from_bytes(&one).unwrap();
+        let got: Vec<&[u8]> = t
+            .url_list
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|u| u.as_ref())
+            .collect();
+        assert_eq!(got, vec![b"http://x.test/a/a".as_slice()]);
+
+        let many = [
+            b"d".as_slice(),
+            info,
+            b"8:url-listl9:http://a/9:http://b/ee",
+        ]
+        .concat();
+        let t: TorrentMetaV1<ByteBuf> = from_bytes(&many).unwrap();
+        assert_eq!(t.url_list.as_ref().unwrap().iter().count(), 2);
+
+        let none = [b"d".as_slice(), info, b"e"].concat();
+        let t: TorrentMetaV1<ByteBuf> = from_bytes(&none).unwrap();
+        assert!(t.url_list.is_none());
+    }
 
     const TORRENT_BYTES: &[u8] =
         include_bytes!("../../librqbit/resources/ubuntu-21.04-desktop-amd64.iso.torrent");

@@ -203,12 +203,20 @@ pub struct ManagedTorrentShared {
 
     // Sending a value asks the torrent's trackers to announce now.
     pub(crate) reannounce_tx: tokio::sync::watch::Sender<()>,
+
+    // Web seeds (BEP 19) from the torrent file's url-list.
+    pub(crate) web_seeds: Vec<url::Url>,
 }
 
 impl ManagedTorrentShared {
     /// The torrent's trackers as they are now.
     pub fn trackers(&self) -> HashSet<url::Url> {
         self.trackers.read().clone()
+    }
+
+    /// The torrent's web seeds (BEP 19).
+    pub fn web_seeds(&self) -> &[url::Url] {
+        &self.web_seeds
     }
 
     pub(crate) fn client_name_and_version(&self) -> &str {

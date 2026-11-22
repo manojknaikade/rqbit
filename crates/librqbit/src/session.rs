@@ -118,7 +118,7 @@ pub struct Session {
     listen_addr: Option<SocketAddr>,
     dht: Option<Dht>,
     pub(crate) connector: Arc<StreamConnector>,
-    reqwest_client: reqwest::Client,
+    pub(crate) reqwest_client: reqwest::Client,
     udp_tracker_client: UdpTrackerClient,
     disable_trackers: bool,
 
@@ -560,6 +560,7 @@ struct InternalAddResult {
     info_hash: Id20,
     metadata: Option<TorrentMetadata>,
     trackers: Vec<url::Url>,
+    web_seeds: Vec<url::Url>,
     name: Option<String>,
 }
 
@@ -1158,6 +1159,7 @@ impl Session {
                             .into_iter()
                             .filter_map(|t| url::Url::parse(&t).ok())
                             .collect(),
+                        web_seeds: Vec::new(),
                         metadata: None,
                         name: magnet.name,
                     }
@@ -1199,8 +1201,20 @@ impl Session {
                         trackers.extend(custom_trackers);
                     }
 
+                    let web_seeds = torrent
+                        .meta
+                        .url_list
+                        .iter()
+                        .flat_map(|l| l.iter())
+                        .filter_map(|u| std::str::from_utf8(u.as_ref()).ok())
+                        .filter_map(|u| url::Url::parse(u).ok())
+                        .filter(|u| matches!(u.scheme(), "http" | "https"))
+                        .unique()
+                        .collect();
+
                     InternalAddResult {
                         info_hash: torrent.meta.info_hash,
+                        web_seeds,
                         metadata: Some(TorrentMetadata::new(
                             torrent.meta.info.data.validate()?,
                             torrent.torrent_bytes,
@@ -1273,6 +1287,7 @@ impl Session {
             info_hash,
             metadata,
             trackers,
+            web_seeds,
             name,
         } = add_res;
 
@@ -1419,6 +1434,7 @@ impl Session {
                 magnet_name: name,
                 client_name_and_version: self.client_name_and_version.clone(),
                 reannounce_tx,
+                web_seeds,
             });
 
             let initializing = Arc::new(TorrentStateInitializing::new(

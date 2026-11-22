@@ -230,6 +230,7 @@ pub async fn create_torrent<'a>(
                 raw_bytes: ByteBufOwned(bytes),
             },
             comment: None,
+            url_list: None,
             created_by: None,
             encoding: Some(b"utf-8"[..].into()),
             publisher: None,
