@@ -126,6 +126,7 @@ impl TorrentStateLive {
         let TorrentStateLocked {
             pieces,
             file_priorities,
+            random_order,
             ..
         } = &mut **g;
         let pieces = pieces.as_mut().ok_or(Error::ChunkTrackerEmpty)?;
@@ -134,6 +135,7 @@ impl TorrentStateLive {
             peer_avg_time: None,
             priority_pieces: self.streams.iter_next_pieces(&self.lengths),
             file_priorities,
+            random_order: random_order.as_deref(),
             file_infos: &self.metadata.file_infos,
             peer_has_piece: |_| true,
             can_steal: |_| false,

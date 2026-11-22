@@ -248,6 +248,22 @@ impl ChunkTracker {
             .filter_map(|id| self.lengths.validate_piece_index(id))
     }
 
+    /// Like [`Self::iter_queued_pieces`], with the file each piece is in. A piece
+    /// shared by two files comes once for each.
+    pub(crate) fn iter_queued_pieces_with_file<'a>(
+        &'a self,
+        file_infos: &'a FileInfos,
+    ) -> impl Iterator<Item = (usize, ValidPieceIndex)> + 'a {
+        file_infos
+            .iter()
+            .enumerate()
+            .filter(|(id, f)| self.per_file_bytes[*id] != f.len)
+            .flat_map(|(id, f)| f.piece_range_usize().map(move |p| (id, p)))
+            .filter(|(_, p)| self.queue_pieces[*p])
+            .filter_map(|(id, p)| Some((id, p.try_into().ok()?)))
+            .filter_map(|(id, p)| Some((id, self.lengths.validate_piece_index(p)?)))
+    }
+
     pub(crate) fn is_piece_have(&self, id: ValidPieceIndex) -> bool {
         self.have.as_slice()[id.get() as usize]
     }

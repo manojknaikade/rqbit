@@ -60,6 +60,9 @@ where
     pub priority_pieces: I,
     /// File download priority ordering.
     pub file_priorities: &'a FilePriorities,
+    /// When set, pick a random queued piece among the files with the lowest rank
+    /// (indexed by file; missing entries are rank 0) instead of going in file order.
+    pub random_order: Option<&'a [u8]>,
     /// File metadata for iterating pieces.
     pub file_infos: &'a FileInfos,
     /// Returns true if the peer has the given piece.
@@ -142,6 +145,15 @@ impl PieceTracker {
             }
         }
 
+        if let Some(ranks) = req.random_order {
+            return match self.pick_random(&req, ranks) {
+                Some(piece) => self.reserve_piece(piece, req.peer),
+                None => self
+                    .try_steal(&req, 3.0)
+                    .unwrap_or(AcquireResult::NoneAvailable),
+            };
+        }
+
         // Then check naturally ordered queued pieces
         // Note: iter_queued_pieces only returns pieces in queue_pieces (not in-flight)
         let queued: Vec<_> = self
@@ -161,6 +173,39 @@ impl PieceTracker {
         }
 
         AcquireResult::NoneAvailable
+    }
+
+    /// A uniformly random queued piece the peer has, among those in the files of the
+    /// lowest rank that has any.
+    fn pick_random<I, P, S>(
+        &self,
+        req: &AcquireRequest<I, P, S>,
+        ranks: &[u8],
+    ) -> Option<ValidPieceIndex>
+    where
+        I: Iterator<Item = ValidPieceIndex>,
+        P: Fn(ValidPieceIndex) -> bool,
+        S: Fn(ValidPieceIndex) -> bool,
+    {
+        use rand::RngExt;
+        let mut rng = rand::rng();
+        let mut best: Option<(u8, ValidPieceIndex)> = None;
+        let mut seen = 0u32;
+        for (file, piece) in self.chunks.iter_queued_pieces_with_file(req.file_infos) {
+            let rank = ranks.get(file).copied().unwrap_or(0);
+            if best.is_some_and(|(r, _)| rank > r) || !(req.peer_has_piece)(piece) {
+                continue;
+            }
+            if best.is_none_or(|(r, _)| rank < r) {
+                seen = 0;
+            }
+            // Reservoir sampling: the n-th candidate replaces the pick with chance 1/n.
+            seen += 1;
+            if rng.random_range(0..seen) == 0 {
+                best = Some((rank, piece));
+            }
+        }
+        best.map(|(_, p)| p)
     }
 
     /// Reserve a piece: remove from queue, add to inflight.
@@ -393,6 +438,7 @@ mod tests {
             peer_avg_time: None,
             priority_pieces: std::iter::empty(),
             file_priorities: &file_priorities,
+            random_order: None,
             file_infos: &file_infos,
             peer_has_piece: |_| true, // Peer has all pieces
             can_steal: |_| true,
@@ -426,6 +472,7 @@ mod tests {
             peer_avg_time: None,
             priority_pieces: std::iter::empty(),
             file_priorities: &file_priorities,
+            random_order: None,
             file_infos: &file_infos,
             peer_has_piece: |p| p.get() >= 2,
             can_steal: |_| true,
@@ -454,6 +501,7 @@ mod tests {
             peer_avg_time: None,
             priority_pieces: std::iter::empty(),
             file_priorities: &file_priorities,
+            random_order: None,
             file_infos: &file_infos,
             peer_has_piece: |_| true,
             can_steal: |_| true,
@@ -487,6 +535,7 @@ mod tests {
             peer_avg_time: None,
             priority_pieces: std::iter::empty(),
             file_priorities: &file_priorities,
+            random_order: None,
             file_infos: &file_infos,
             peer_has_piece: |_| true,
             can_steal: |_| true,
@@ -515,6 +564,7 @@ mod tests {
             peer_avg_time: None,
             priority_pieces: std::iter::empty(),
             file_priorities: &file_priorities,
+            random_order: None,
             file_infos: &file_infos,
             peer_has_piece: |p| p == piece, // Only has the failed piece
             can_steal: |_| true,
@@ -544,6 +594,7 @@ mod tests {
             peer_avg_time: None,
             priority_pieces: std::iter::empty(),
             file_priorities: &file_priorities,
+            random_order: None,
             file_infos: &file_infos,
             peer_has_piece: |_| true,
             can_steal: |_| true,
@@ -556,6 +607,7 @@ mod tests {
             peer_avg_time: None,
             priority_pieces: std::iter::empty(),
             file_priorities: &file_priorities,
+            random_order: None,
             file_infos: &file_infos,
             peer_has_piece: |_| true,
             can_steal: |_| true,
@@ -570,6 +622,7 @@ mod tests {
             peer_avg_time: None,
             priority_pieces: std::iter::empty(),
             file_priorities: &file_priorities,
+            random_order: None,
             file_infos: &file_infos,
             peer_has_piece: |_| true,
             can_steal: |_| true,
@@ -609,6 +662,7 @@ mod tests {
             peer_avg_time: None,
             priority_pieces: std::iter::empty(),
             file_priorities: &file_priorities,
+            random_order: None,
             file_infos: &file_infos,
             peer_has_piece: |_| true,
             can_steal: |_| true,
@@ -618,6 +672,7 @@ mod tests {
             peer_avg_time: None,
             priority_pieces: std::iter::empty(),
             file_priorities: &file_priorities,
+            random_order: None,
             file_infos: &file_infos,
             peer_has_piece: |_| true,
             can_steal: |_| true,
@@ -635,6 +690,7 @@ mod tests {
             peer_avg_time: None,
             priority_pieces: std::iter::empty(),
             file_priorities: &file_priorities,
+            random_order: None,
             file_infos: &file_infos,
             peer_has_piece: |_| true,
             can_steal: |_| true,
@@ -673,6 +729,7 @@ mod tests {
             peer_avg_time: None,
             priority_pieces: priority.into_iter(),
             file_priorities: &file_priorities,
+            random_order: None,
             file_infos: &file_infos,
             peer_has_piece: |_| true,
             can_steal: |_| true,
@@ -699,6 +756,7 @@ mod tests {
             peer_avg_time: None,
             priority_pieces: std::iter::empty(),
             file_priorities: &file_priorities,
+            random_order: None,
             file_infos: &file_infos,
             peer_has_piece: |_| false, // Peer has nothing
             can_steal: |_| true,
@@ -747,6 +805,7 @@ mod tests {
             peer_avg_time: None,
             priority_pieces: std::iter::empty(),
             file_priorities: &file_priorities,
+            random_order: None,
             file_infos: &file_infos,
             peer_has_piece: |_| true,
             can_steal: |_| true,
@@ -763,6 +822,7 @@ mod tests {
             peer_avg_time: None,
             priority_pieces: std::iter::empty(),
             file_priorities: &file_priorities,
+            random_order: None,
             file_infos: &file_infos,
             peer_has_piece: |_| true,
             can_steal: |_| true,
@@ -785,6 +845,7 @@ mod tests {
             peer_avg_time: Some(Duration::from_millis(1)),
             priority_pieces: std::iter::empty(),
             file_priorities: &file_priorities,
+            random_order: None,
             file_infos: &file_infos,
             peer_has_piece: |p| p.get() == 4, // Peer B only has piece 4
             can_steal: |_| true,
@@ -800,5 +861,78 @@ mod tests {
             }
             _ => panic!("Expected Stolen, got {:?}", result),
         }
+    }
+
+    fn two_file_setup() -> (PieceTracker, FileInfos) {
+        let piece_length = 16384u32;
+        let lengths = Lengths::new(piece_length as u64 * 10, piece_length).unwrap();
+        let bf_len = lengths.piece_bitfield_bytes();
+        let have = BF::from_boxed_slice(vec![0u8; bf_len].into_boxed_slice());
+        let mut selected = BF::from_boxed_slice(vec![0u8; bf_len].into_boxed_slice());
+        for i in 0..10 {
+            selected.set(i, true);
+        }
+        let file = |name: &str, n: u32| crate::file_info::FileInfo {
+            relative_filename: name.into(),
+            offset_in_torrent: piece_length as u64 * n as u64,
+            len: piece_length as u64 * 5,
+            piece_range: n..n + 5,
+            attrs: Default::default(),
+        };
+        let file_infos = vec![file("a", 0), file("b", 5)];
+        let chunks = ChunkTracker::new(have.into_dyn(), selected, lengths, &file_infos).unwrap();
+        (PieceTracker::new(chunks), file_infos)
+    }
+
+    fn acquire_random(
+        tracker: &mut PieceTracker,
+        file_infos: &FileInfos,
+        ranks: &[u8],
+    ) -> Option<u32> {
+        let file_priorities = make_default_file_priorities(file_infos);
+        match tracker.acquire_piece(AcquireRequest {
+            peer: peer(1),
+            peer_avg_time: None,
+            priority_pieces: std::iter::empty(),
+            file_priorities: &file_priorities,
+            random_order: Some(ranks),
+            file_infos,
+            peer_has_piece: |_| true,
+            can_steal: |_| false,
+        }) {
+            AcquireResult::Reserved(p) => Some(p.get()),
+            AcquireResult::NoneAvailable => None,
+            r => panic!("unexpected {r:?}"),
+        }
+    }
+
+    #[test]
+    fn test_random_order_takes_each_piece_once() {
+        let (mut tracker, file_infos) = two_file_setup();
+        let mut got: Vec<u32> =
+            std::iter::from_fn(|| acquire_random(&mut tracker, &file_infos, &[])).collect();
+        got.sort_unstable();
+        assert_eq!(got, (0..10).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_random_order_is_not_in_order() {
+        // 20 tries of 10 pieces each all coming out in order would mean it is not random.
+        let in_order = (0..20).all(|_| {
+            let (mut tracker, file_infos) = two_file_setup();
+            let got: Vec<u32> =
+                std::iter::from_fn(|| acquire_random(&mut tracker, &file_infos, &[])).collect();
+            got.windows(2).all(|w| w[0] < w[1])
+        });
+        assert!(!in_order);
+    }
+
+    #[test]
+    fn test_random_order_lowest_rank_first() {
+        let (mut tracker, file_infos) = two_file_setup();
+        let got: Vec<u32> =
+            std::iter::from_fn(|| acquire_random(&mut tracker, &file_infos, &[1, 0])).collect();
+        assert!(got[..5].iter().all(|p| (5..10).contains(p)), "{got:?}");
+        assert!(got[5..].iter().all(|p| (0..5).contains(p)), "{got:?}");
     }
 }

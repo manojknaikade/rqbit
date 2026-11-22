@@ -106,6 +106,8 @@ pub(crate) struct ManagedTorrentLocked {
     pub(crate) state: ManagedTorrentState,
     pub(crate) only_files: Option<Vec<usize>>,
     pub(crate) file_order: Option<Vec<usize>>,
+    /// See [`ManagedTorrent::update_random_order`].
+    pub(crate) random_order: Option<Vec<u8>>,
 }
 
 #[derive(Default)]
@@ -289,6 +291,11 @@ impl ManagedTorrent {
         self.locked.read().file_order.clone()
     }
 
+    /// The random order set with [`Self::update_random_order`], if any.
+    pub fn random_order(&self) -> Option<Vec<u8>> {
+        self.locked.read().random_order.clone()
+    }
+
     pub fn only_files(&self) -> Option<Vec<usize>> {
         self.locked.read().only_files.clone()
     }
@@ -459,6 +466,7 @@ impl ManagedTorrent {
                     let (tx, rx) = tokio::sync::oneshot::channel();
                     let live =
                         TorrentStateLive::new(paused, g.file_order.as_deref(), tx, token.clone())?;
+                    live.update_random_order(g.random_order.as_deref());
                     g.state = ManagedTorrentState::Live(live.clone());
                     t.state_change_notify.notify_waiters();
 
@@ -707,6 +715,20 @@ impl ManagedTorrent {
         }
         g.file_order = file_order;
         Ok(())
+    }
+
+    /// Download pieces in random order instead of in file order. `None` (the default)
+    /// downloads each file from its start to its end, files one after another.
+    /// `Some(ranks)` picks a random needed piece each time, first among the files with
+    /// the lowest rank (`ranks[file]`; files past its end count as rank 0). Random order
+    /// spreads pieces across the swarm, which helps when few peers have the whole torrent.
+    /// Pieces a stream is waiting for are still fetched first. Works on live and paused torrents.
+    pub fn update_random_order(&self, ranks: Option<Vec<u8>>) {
+        let mut g = self.locked.write();
+        if let ManagedTorrentState::Live(l) = &g.state {
+            l.update_random_order(ranks.as_deref());
+        }
+        g.random_order = ranks;
     }
 
     // Returns true if needed to unpause torrent.

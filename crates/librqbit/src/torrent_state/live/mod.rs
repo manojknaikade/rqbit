@@ -130,6 +130,9 @@ pub(crate) struct TorrentStateLocked {
     // The sorted file list in which order to download them.
     pub(crate) file_priorities: FilePriorities,
 
+    // File ranks when pieces are picked at random; None picks them in file order.
+    pub(crate) random_order: Option<Vec<u8>>,
+
     // If this is None, then it was already used
     fatal_errors_tx: Option<tokio::sync::oneshot::Sender<anyhow::Error>>,
 
@@ -264,6 +267,7 @@ impl TorrentStateLive {
             _locked: RwLock::new(TorrentStateLocked {
                 pieces: Some(PieceTracker::new(paused.chunk_tracker)),
                 file_priorities,
+                random_order: None,
                 fatal_errors_tx: Some(fatal_errors_tx),
                 unflushed_bitv_bytes: 0,
             }),
@@ -809,6 +813,10 @@ impl TorrentStateLive {
     pub(crate) fn update_file_order(&self, file_order: Option<&[usize]>) {
         self.lock_write("update_file_order").file_priorities =
             make_file_priorities(&self.metadata.file_infos, file_order);
+    }
+
+    pub(crate) fn update_random_order(&self, ranks: Option<&[u8]>) {
+        self.lock_write("update_random_order").random_order = ranks.map(|r| r.to_vec());
     }
 
     pub(crate) fn update_only_files(&self, only_files: &HashSet<usize>) -> anyhow::Result<()> {
@@ -1463,6 +1471,7 @@ impl PeerHandler {
                 let TorrentStateLocked {
                     pieces,
                     file_priorities,
+                    random_order,
                     ..
                 } = &mut **g;
                 let pieces = pieces.as_mut().ok_or(Error::ChunkTrackerEmpty)?;
@@ -1471,6 +1480,7 @@ impl PeerHandler {
                     peer_avg_time: self.counters.average_piece_download_time(),
                     priority_pieces: self.state.streams.iter_next_pieces(&self.state.lengths),
                     file_priorities,
+                    random_order: random_order.as_deref(),
                     file_infos: &self.state.metadata.file_infos,
                     peer_has_piece: |p| bf.get(p.get() as usize).map(|v| *v) == Some(true),
                     can_steal: |p| {
