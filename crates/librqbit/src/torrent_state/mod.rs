@@ -183,7 +183,8 @@ pub struct ManagedTorrentShared {
     pub id: TorrentId,
     pub info_hash: Id20,
     pub(crate) spawner: BlockingSpawner,
-    pub trackers: HashSet<url::Url>,
+    // Behind a lock so the list can be edited; see `trackers()`.
+    pub(crate) trackers: parking_lot::RwLock<HashSet<url::Url>>,
     pub peer_id: Id20,
     pub span: tracing::Span,
     pub(crate) options: ManagedTorrentOptions,
@@ -205,6 +206,11 @@ pub struct ManagedTorrentShared {
 }
 
 impl ManagedTorrentShared {
+    /// The torrent's trackers as they are now.
+    pub fn trackers(&self) -> HashSet<url::Url> {
+        self.trackers.read().clone()
+    }
+
     pub(crate) fn client_name_and_version(&self) -> &str {
         &self.client_name_and_version
     }
