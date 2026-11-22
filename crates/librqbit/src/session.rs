@@ -42,7 +42,7 @@ use crate::{
     type_aliases::{BoxAsyncReadVectored, BoxAsyncWrite, PeerStream},
 };
 use anyhow::{Context, bail};
-use arc_swap::ArcSwapOption;
+use arc_swap::{ArcSwap, ArcSwapOption};
 use bencode::bencode_serialize_to_writer;
 use buffers::{ByteBuf, ByteBufOwned};
 use bytes::Bytes;
@@ -139,8 +139,8 @@ pub struct Session {
     pub(crate) concurrent_initialize_semaphore: Arc<tokio::sync::Semaphore>,
     pub ratelimits: Limits,
 
-    pub blocklist: IpRanges,
-    pub allowlist: Option<IpRanges>,
+    pub blocklist: ArcSwap<IpRanges>,
+    pub allowlist: ArcSwapOption<IpRanges>,
 
     // Monitoring / tracing / logging
     pub(crate) stats: Arc<SessionStats>,
@@ -821,8 +821,8 @@ impl Session {
 
                 #[cfg(feature = "disable-upload")]
                 _disable_upload: opts.disable_upload,
-                blocklist,
-                allowlist,
+                blocklist: ArcSwap::from_pointee(blocklist),
+                allowlist: ArcSwapOption::new(allowlist.map(Arc::new)),
                 lsd,
             });
 
@@ -926,14 +926,19 @@ impl Session {
             .unwrap_or_else(|| Duration::from_secs(10));
 
         let incoming_ip = addr.ip();
-        if self.blocklist.has(incoming_ip) {
+        if self.blocklist.load().has(incoming_ip) {
             self.stats
                 .counters
                 .blocked_incoming
                 .fetch_add(1, Ordering::Relaxed);
             bail!("Incoming ip {incoming_ip} is in blocklist");
         }
-        if self.allowlist.as_ref().is_some_and(|l| !l.has(incoming_ip)) {
+        if self
+            .allowlist
+            .load()
+            .as_ref()
+            .is_some_and(|l| !l.has(incoming_ip))
+        {
             self.stats
                 .counters
                 .blocked_incoming
@@ -1088,6 +1093,24 @@ impl Session {
         self.cancellation_token.cancel();
         // this sucks, but hopefully will be enough
         tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+
+    /// Swap the blocklist and allowlist without restarting the session.
+    /// Connected peers that the new lists block are disconnected.
+    pub fn set_ip_filter(&self, blocklist: IpRanges, allowlist: Option<IpRanges>) {
+        self.blocklist.store(Arc::new(blocklist));
+        self.allowlist.store(allowlist.map(Arc::new));
+        let blocklist = self.blocklist.load();
+        let allowlist = self.allowlist.load();
+        let blocked = |ip: std::net::IpAddr| {
+            blocklist.has(ip) || allowlist.as_ref().is_some_and(|l| !l.has(ip))
+        };
+        let live: Vec<_> = self.with_torrents(|ts| ts.filter_map(|(_, t)| t.live()).collect());
+        let mut dropped = 0;
+        for t in live {
+            dropped += t.disconnect_peers_where(&blocked);
+        }
+        info!(dropped, "ip filter replaced");
     }
 
     /// Run a callback given the currently managed torrents.
