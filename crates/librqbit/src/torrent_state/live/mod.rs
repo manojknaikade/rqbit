@@ -619,7 +619,7 @@ impl TorrentStateLive {
                 continue;
             }
 
-            if session.blocklist.has(addr.ip()) {
+            if session.blocklist.load().has(addr.ip()) {
                 session
                     .stats
                     .counters
@@ -631,6 +631,7 @@ impl TorrentStateLive {
 
             if session
                 .allowlist
+                .load()
                 .as_ref()
                 .is_some_and(|l| !l.has(addr.ip()))
             {
@@ -882,6 +883,24 @@ impl TorrentStateLive {
             }
         }
         Ok(())
+    }
+
+    /// Disconnect live peers whose address matches. Returns how many.
+    pub(crate) fn disconnect_peers_where(
+        &self,
+        matches: impl Fn(std::net::IpAddr) -> bool,
+    ) -> usize {
+        let mut count = 0;
+        for mut pe in self.peers.states.iter_mut() {
+            if matches!(pe.value().get_state(), PeerState::Live(_)) && matches(pe.key().ip()) {
+                let prev = pe.value_mut().set_not_needed(&self.peers);
+                if let Some(live) = prev.take_live_no_counters() {
+                    let _ = live.tx.send(WriterRequest::Disconnect(Ok(())));
+                }
+                count += 1;
+            }
+        }
+        count
     }
 
     fn disconnect_all_peers_that_have_full_torrent(&self) {
